@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -32,6 +32,9 @@ import {
 type Decision = "ALLOW" | "ASK" | "BLOCK";
 type Threat = { label: string; points: number };
 type ScenarioKey = "safe" | "suspicious" | "malicious";
+type AuditEntry = { time: string; request: string; tool: string; risk: number; threats: string; decision: Decision };
+
+const AUDIT_STORAGE_KEY = "firewall-agent.audit.v1";
 
 type Scenario = {
   label: string;
@@ -119,8 +122,39 @@ export default function Home() {
   const [pipelineStage, setPipelineStage] = useState(6);
   const [isRunning, setIsRunning] = useState(false);
   const [whyBlocked, setWhyBlocked] = useState(false);
-  const [audit, setAudit] = useState<Array<{ time: string; request: string; tool: string; risk: number; threats: string; decision: Decision }>>([]);
-  const [sessionCounts, setSessionCounts] = useState({ runs: 0, allow: 0, ask: 0, block: 0 });
+  const [audit, setAudit] = useState<AuditEntry[]>(() => {
+    try {
+      const stored = window.localStorage.getItem(AUDIT_STORAGE_KEY);
+      if (!stored) return [];
+      const parsed = JSON.parse(stored) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((entry): entry is AuditEntry => {
+        if (!entry || typeof entry !== "object") return false;
+        const candidate = entry as Partial<AuditEntry>;
+        return typeof candidate.time === "string"
+          && typeof candidate.request === "string"
+          && typeof candidate.tool === "string"
+          && typeof candidate.risk === "number"
+          && typeof candidate.threats === "string"
+          && (candidate.decision === "ALLOW" || candidate.decision === "ASK" || candidate.decision === "BLOCK");
+      }).slice(0, 8);
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(audit));
+  }, [audit]);
+
+  const sessionCounts = useMemo(() => ({
+    runs: audit.length,
+    allow: audit.filter((entry) => entry.decision === "ALLOW").length,
+    ask: audit.filter((entry) => entry.decision === "ASK").length,
+    block: audit.filter((entry) => entry.decision === "BLOCK").length,
+  }), [audit]);
+
+  const lastDecision = audit[0]?.decision ?? "—";
 
   const result = useMemo(() => analyze(prompt, intent, tool), [prompt, intent, tool]);
 
@@ -147,7 +181,6 @@ export default function Home() {
         window.clearInterval(timer);
         const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
         setAudit((current) => [{ time, request: prompt, tool, risk: result.risk, threats: result.threats.map((threat) => threat.label).join(", ") || "None", decision: result.decision }, ...current].slice(0, 8));
-        setSessionCounts((current) => ({ ...current, runs: current.runs + 1, [result.decision.toLowerCase()]: current[result.decision.toLowerCase() as "allow" | "ask" | "block"] + 1 }));
         setIsRunning(false);
       }
     }, 430);
@@ -169,7 +202,7 @@ export default function Home() {
 
       <section className="hero-section app-hero" id="top">
         <div className="hero-copy"><div className="eyebrow"><Radio size={14} /> AI-NATIVE SECURITY OPERATIONS</div><h1>Make agent risk<br /><em>visible</em> before<br />it moves.</h1><p className="hero-lede">A working firewall lab for testing hostile prompts, tool calls, intent drift and sensitive data—then seeing exactly why the policy engine allows, asks or blocks.</p><div className="hero-actions"><a className="button button-primary" href="#simulator"><span>Open firewall lab</span><ArrowDown size={16} /></a><button className="button button-ghost" onClick={runFirewall}><Play size={14} fill="currentColor" /> {isRunning ? "Pipeline running" : "Run current request"}</button></div><div className="hero-meta"><span><span className="meta-icon"><Zap size={12} /></span> 5 detection controls</span><span><span className="meta-icon"><Network size={12} /></span> zero-trust by default</span></div></div>
-        <div className="hero-visual"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="orbit orbit-three" /><div className="crosshair crosshair-x" /><div className="crosshair crosshair-y" /><div className="core-shield"><ShieldCheck size={66} strokeWidth={1.2} /><span>LIVE<br />GUARDRAIL</span></div><div className="telemetry telemetry-top"><span>SESSION RUNS</span><strong>{sessionCounts.runs}</strong></div><div className="telemetry telemetry-left"><span>ALLOWS</span><strong>{sessionCounts.allow}</strong></div><div className="telemetry telemetry-right"><span>BLOCKS</span><strong>{sessionCounts.block}</strong></div><div className="telemetry telemetry-bottom"><span>LAST DECISION</span><strong>{sessionCounts.runs ? result.decision : "—"}</strong></div><div className="scan-line" /></div>
+        <div className="hero-visual"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="orbit orbit-three" /><div className="crosshair crosshair-x" /><div className="crosshair crosshair-y" /><div className="core-shield"><ShieldCheck size={66} strokeWidth={1.2} /><span>LIVE<br />GUARDRAIL</span></div><div className="telemetry telemetry-top"><span>SESSION RUNS</span><strong>{sessionCounts.runs}</strong></div><div className="telemetry telemetry-left"><span>ALLOWS</span><strong>{sessionCounts.allow}</strong></div><div className="telemetry telemetry-right"><span>BLOCKS</span><strong>{sessionCounts.block}</strong></div><div className="telemetry telemetry-bottom"><span>LAST DECISION</span><strong>{lastDecision}</strong></div><div className="scan-line" /></div>
       </section>
 
       <section className="metric-strip"><div><span className="metric-label">SESSION RUNS</span><strong>{sessionCounts.runs}</strong><span className="metric-muted">this session</span></div><div><span className="metric-label">ALLOWED</span><strong>{sessionCounts.allow}</strong><span className="metric-muted">live count</span></div><div><span className="metric-label">ASKED</span><strong>{sessionCounts.ask}</strong><span className="metric-muted">live count</span></div><div><span className="metric-label">BLOCKED</span><strong>{sessionCounts.block}</strong><span className="metric-muted">live count</span></div></section>
